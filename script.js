@@ -1,15 +1,15 @@
-import { 
-    getFirestore, collection, query, onSnapshot, 
-    doc, setDoc, deleteDoc, writeBatch, 
-    where, getDocs, orderBy 
+import {
+    getFirestore, collection, query, onSnapshot,
+    doc, setDoc, deleteDoc, writeBatch,
+    where, getDocs, orderBy, getDoc
 } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
 // Import Firebase Auth functions exposed globally by index.html
-const { 
-    auth, 
-    createUserWithEmailAndPassword, 
-    signInWithEmailAndPassword, 
-    signOut 
+const {
+    auth,
+    createUserWithEmailAndPassword,
+    signInWithEmailAndPassword,
+    signOut
 } = window;
 
 // --- DOM ELEMENTS ---
@@ -25,6 +25,7 @@ const mainContainer = document.getElementById('mainContainer');
 const fontSizeSlider = document.getElementById('fontSizeSlider');
 const fontSizeValueDisplay = document.getElementById('fontSizeValue');
 const importFileInput = document.getElementById('importFileInput');
+const documentFolderSelector = document.getElementById('documentFolderSelector');
 
 const messageBox = document.getElementById('messageBox');
 const normalMarkdownPreview = document.getElementById('normalMarkdownPreview');
@@ -41,8 +42,8 @@ const hamburgerOverlay = document.getElementById('hamburgerOverlay');
 // Backup and Restore Buttons
 const backupAllButton = document.getElementById('backupAllButton');
 const restoreAllButton = document.getElementById('restoreAllButton');
-const saveAllNotesButton = document.getElementById('saveAllNotesButton'); 
-const restoreNotesButton = document.getElementById('restoreNotesButton'); 
+const saveAllNotesButton = document.getElementById('saveAllNotesButton');
+const restoreNotesButton = document.getElementById('restoreNotesButton');
 
 // Sidebar Elements
 const sidebar = document.getElementById('sidebar');
@@ -71,7 +72,6 @@ const sectionToggleBtn = document.getElementById('sectionToggleBtn');
 
 // Sidebar Toggle Button
 const sidebarToggleBtn = document.getElementById('sidebarToggleBtn');
-// NEW: Sidebar Toggle Icons (from index.html)
 const sidebarToggleOpenIcon = document.getElementById('sidebarToggleOpenIcon');
 const sidebarToggleCloseIcon = document.getElementById('sidebarToggleCloseIcon');
 
@@ -112,21 +112,21 @@ const folderManagementModal = document.getElementById('folderManagementModal');
 const closeFolderModalBtn = document.getElementById('closeFolderModalBtn');
 const newFolderNameInput = document.getElementById('newFolderName');
 const createFolderBtn = document.getElementById('createFolderBtn');
-const folderListContainer = document.getElementById('folderListContainer'); 
+const folderListContainer = document.getElementById('folderListContainer');
 
 const uncategorizedDocsModal = document.getElementById('uncategorizedDocsModal');
 const closeUncategorizedModalBtn = document.getElementById('closeUncategorizedModalBtn');
 const uncategorizedDocsList = document.getElementById('uncategorizedDocsList');
 const addSelectedDocsToFolderBtn = document.getElementById('addSelectedDocsToFolderBtn');
-let currentFolderIdForAssignment = null; 
+let currentFolderIdForAssignment = null;
 
 const documentMovementButtons = document.getElementById('documentMovementButtons');
 const moveDocUpFixedBtn = document.getElementById('moveDocUpFixedBtn');
 const moveDocDownFixedBtn = document.getElementById('moveDocDownFixedBtn');
 const moveDocToFolderFixedBtn = document.getElementById('moveDocToFolderFixedBtn');
-let selectedDocIdForMovement = null; 
+let selectedDocIdForMovement = null;
 
-// NEW: Auth Elements
+// Auth Elements
 const authButton = document.getElementById('authButton');
 const authButtonText = document.getElementById('authButtonText');
 const authIcon = document.getElementById('authIcon');
@@ -143,30 +143,29 @@ const authErrorMsg = document.getElementById('authErrorMsg');
 
 // Resizer Elements
 const resizer = document.getElementById('resizer');
-const mainLayout = document.getElementById('mainLayout'); 
+const mainLayout = document.getElementById('mainLayout');
 const mainContentArea = document.getElementById('mainContentArea');
 
 
 // --- DATA AND STATE ---
-let documentsData = []; 
-let foldersData = []; 
+let documentsData = [];
+let foldersData = [];
+let userSettings = {};
 
-const LAST_OPENED_DOC_KEY = 'lastOpenedDocumentId'; 
+const LAST_OPENED_DOC_KEY = 'lastOpenedDocumentId';
 const THEME_STORAGE_KEY = 'themeMode';
-const APP_THEME_STORAGE_KEY = 'appTheme';
-const CODE_BLOCK_THEME_STORAGE_KEY = 'codeBlockTheme';
-const FONT_FAMILY_STORAGE_KEY = 'fontFamily';
-const FONT_SIZE_STORAGE_KEY = 'fontSize';
-const README_AUTOSAVE_DRAFT_KEY = 'readmeAutosaveDraft';
 const CURRENT_SECTION_STORAGE_KEY = 'currentSectionType';
 const SIDEBAR_STATE_KEY = 'sidebarState';
 const SIDEBAR_WIDTH_KEY = 'sidebarWidth';
 const FOLDER_OPEN_STATE_KEY = 'folderOpenStates';
+const README_AUTOSAVE_DRAFT_KEY = 'readmeAutosaveDraft';
+const SETTINGS_DOC_ID = 'ui-settings';
+
 
 let editingDocumentUniqueId = null;
-window.currentDisplayedDocumentId = null; 
+window.currentDisplayedDocumentId = null;
 
-let isSigningUp = false; 
+let isSigningUp = false;
 let currentSection = 'js';
 
 let currentInlineSearchTerm = '';
@@ -202,8 +201,8 @@ const codeHighlightThemes = {
 
 // --- UTILITY FUNCTIONS ---
 
-const MIN_SIDEBAR_WIDTH = 200; 
-const MAX_SIDEBAR_WIDTH = 600; 
+const MIN_SIDEBAR_WIDTH = 200;
+const MAX_SIDEBAR_WIDTH = 600;
 const DEFAULT_SIDEBAR_WIDTH = 320;
 
 function applySidebarWidth(width) {
@@ -211,7 +210,6 @@ function applySidebarWidth(width) {
     if (sidebar) sidebar.style.width = `${newWidth}px`;
     if (resizer) resizer.style.left = `${newWidth}px`;
     if (mainContentArea) {
-        // On Desktop, set margin-left for main content
         if (window.innerWidth >= 768 && !document.body.classList.contains('sidebar-closed')) {
             mainContentArea.style.marginLeft = `${newWidth}px`;
         } else {
@@ -225,67 +223,55 @@ function loadAndApplySidebarWidth() {
     let initialWidth = savedWidth ? parseInt(savedWidth, 10) : DEFAULT_SIDEBAR_WIDTH;
     initialWidth = Math.max(MIN_SIDEBAR_WIDTH, Math.min(initialWidth, MAX_SIDEBAR_WIDTH));
     
-    // Apply width to the sidebar element itself
     if(sidebar) sidebar.style.width = `${initialWidth}px`;
     
     const isClosed = document.body.classList.contains('sidebar-closed');
     const isMobile = window.innerWidth < 768;
 
-    // Remove transitions temporarily for instant repositioning
     if(sidebar) sidebar.style.transition = 'none';
     if(resizer) resizer.style.transition = 'none';
     if(mainContentArea) mainContentArea.style.transition = 'none';
 
     if (isMobile) {
-        // Mobile view: sidebar is fixed and moves with 'left' property
         if (isClosed) {
-            // Closed state: sidebar is off-screen
             if(sidebar) sidebar.style.left = `-${initialWidth}px`;
             if(mainContentArea) mainContentArea.style.marginLeft = '0px';
-            if(resizer) resizer.style.left = `0px`; // Resizer always hidden by CSS on mobile
+            if(resizer) resizer.style.left = `0px`;
         } else {
-            // Open state: sidebar is visible, overlays content
             if(sidebar) sidebar.style.left = '0px';
             if(mainContentArea) mainContentArea.style.marginLeft = '0px';
             if(resizer) resizer.style.left = `0px`;
         }
-        
     } else {
-        // Desktop view: sidebar is part of layout flow using margin-left
         if (isClosed) {
-            // Closed state: off-screen and main content shifts left
             if(sidebar) sidebar.style.left = `-${initialWidth}px`;
             if(mainContentArea) mainContentArea.style.marginLeft = '0px';
-            if(resizer) resizer.style.left = `0px`; 
+            if(resizer) resizer.style.left = `0px`;
         } else {
-            // Open state: visible, main content pushed by margin-left
             if(sidebar) sidebar.style.left = '0px';
             if(mainContentArea) mainContentArea.style.marginLeft = `${initialWidth}px`;
             if(resizer) resizer.style.left = `${initialWidth}px`;
         }
     }
 
-    // Resizer visibility control
     if (resizer) {
-        if (isMobile || isClosed) { 
+        if (isMobile || isClosed) {
             resizer.style.display = 'none';
         } else {
             resizer.style.display = 'block';
         }
     }
     
-    // Control visibility of the mobile toggle button
     if (sidebarToggleBtn) {
         if (isMobile) {
-            sidebarToggleBtn.style.display = 'flex'; // Show on mobile
+            sidebarToggleBtn.style.display = 'flex';
         } else {
-            sidebarToggleBtn.style.display = 'none'; // Hide on desktop
+            sidebarToggleBtn.style.display = 'none';
         }
     }
     
     updateSidebarToggleIcon();
 
-    // Reapply transitions after state is set
     setTimeout(() => {
         if(sidebar) sidebar.style.transition = 'left 0.3s ease-in-out, width 0.3s ease-in-out';
         if(resizer) resizer.style.transition = 'background-color 0.15s ease-in-out, left 0.3s ease-in-out';
@@ -295,12 +281,11 @@ function loadAndApplySidebarWidth() {
 
 if (resizer) {
     resizer.addEventListener('mousedown', function(e) {
-        // Only allow resizing on desktop and when sidebar is open
         if (document.body.classList.contains('sidebar-closed') || window.innerWidth < 768) return;
         let isResizing = true;
         resizer.classList.add('resizing');
-        document.body.style.cursor = 'col-resize'; 
-        document.body.style.userSelect = 'none'; 
+        document.body.style.cursor = 'col-resize';
+        document.body.style.userSelect = 'none';
         const startX = e.clientX;
         const startWidth = sidebar.offsetWidth;
 
@@ -323,7 +308,6 @@ if (resizer) {
             document.body.style.cursor = '';
             document.body.style.userSelect = '';
             
-            // Reapply transitions
             sidebar.style.transition = 'left 0.3s ease-in-out, width 0.3s ease-in-out';
             mainContentArea.style.transition = 'margin-left 0.3s ease-in-out, width 0.3s ease-in-out';
             resizer.style.transition = 'background-color 0.15s ease-in-out, left 0.3s ease-in-out';
@@ -369,19 +353,19 @@ function applyStyling() {
     let codeHighlightFile;
     const codeThemeDetails = codeHighlightThemes[selectedCodeThemeKey];
     if (codeThemeDetails) {
-        codeHighlightFile = codeThemeDetails.dark; 
-        if (!codeHighlightFile) codeHighlightFile = codeThemeDetails.light; 
+        codeHighlightFile = codeThemeDetails.dark;
+        if (!codeHighlightFile) codeHighlightFile = codeThemeDetails.light;
     }
     if (!codeHighlightFile) {
         const fallbackAppTheme = appThemeDetails || appThemes['system-default'];
-        codeHighlightFile = fallbackAppTheme.defaultHighlightDark; 
+        codeHighlightFile = fallbackAppTheme.defaultHighlightDark;
     }
     highlightThemeLink.href = `https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/${codeHighlightFile}.min.css`;
     setTimeout(applySyntaxHighlighting, 50);
 }
 
 function applyFontFamily(fontFamily) {
-    document.body.style.fontFamily = `'${fontFamily}', sans-serif`;
+    document.documentElement.style.setProperty('--main-font', fontFamily);
 }
 
 function applyFontSize(size) {
@@ -406,7 +390,7 @@ export function showMessage(title, message, type = 'info') {
             bgColorClasses = ['bg-gray-800']; textColorClasses = ['text-blue-400']; srOnlyText = 'Info'; break;
         case 'warning':
             bgColorClasses = ['bg-gray-800']; textColorClasses = ['text-yellow-300']; srOnlyText = 'Warning'; break;
-        default: 
+        default:
             bgColorClasses = ['bg-gray-800']; textColorClasses = ['text-gray-300']; srOnlyText = 'Message'; break;
     }
     alertDiv.classList.add(...bgColorClasses, ...textColorClasses);
@@ -486,6 +470,27 @@ function hideEditor() {
     contentDisplayAreaWrapper.classList.remove('hidden');
 }
 
+function populateFolderSelector() {
+    documentFolderSelector.innerHTML = '<option value="null">بدون پوشه (Uncategorized)</option>';
+    const foldersInCurrentSection = foldersData
+        .filter(f => f.type === currentSection)
+        .sort((a, b) => a.orderIndex - b.orderIndex); 
+
+    let lastFolderId = null;
+
+    if (foldersInCurrentSection.length > 0) {
+        foldersInCurrentSection.forEach(folder => {
+            const option = document.createElement('option');
+            option.value = folder.id;
+            option.textContent = folder.name;
+            documentFolderSelector.appendChild(option);
+        });
+        lastFolderId = foldersInCurrentSection[foldersInCurrentSection.length - 1].id;
+    }
+    
+    return lastFolderId;
+}
+
 export function displaySelectedContent(uniqueId, searchTermForHighlighting = null) {
     hideEditor();
     clearSearchHighlights();
@@ -516,7 +521,7 @@ export function displaySelectedContent(uniqueId, searchTermForHighlighting = nul
                 if (listItem) {
                     listItem.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
                 }
-            }, 50); 
+            }, 50);
         }
         mainContentActionButtons.classList.remove('hidden');
         window.currentDisplayedDocumentId = uniqueId;
@@ -530,11 +535,11 @@ export function displaySelectedContent(uniqueId, searchTermForHighlighting = nul
 
         setTimeout(() => {
             if (contentDisplayAreaWrapper) {
-                contentDisplayAreaWrapper.scrollTop = 0; 
+                contentDisplayAreaWrapper.scrollTop = 0;
             }
         }, 50);
 
-        if (window.injectNoteButtonsAndNotes) { 
+        if (window.injectNoteButtonsAndNotes) {
             window.injectNoteButtonsAndNotes(contentDisplayArea, uniqueId);
         }
 
@@ -546,29 +551,16 @@ export function displaySelectedContent(uniqueId, searchTermForHighlighting = nul
     }
 }
 
-// --- FIREBASE UTILITY FUNCTIONS (Modified: No Anonymous ID) ---
+// --- FIREBASE UTILITY FUNCTIONS ---
 
-/**
- * مسیر Collection را بر اساس appId و userId برمی‌گرداند.
- * اگر کاربر لاگین نکرده باشد، یک مسیر عمومی/لاگ‌آوت شده بازمی‌گرداند.
- * @param {string} collectionName نام Collection (docs یا folders)
- * @returns {string} مسیر کامل Collection
- */
 function getCollectionPath(collectionName) {
     if (!window.appId || !window.userId) {
         console.error("Firebase App ID or User ID is not available.");
-        return `invalid/path/for/${collectionName}`; 
+        return `invalid/path/for/${collectionName}`;
     }
     return `artifacts/${window.appId}/users/${window.userId}/${collectionName}`;
 }
 
-/**
- * یک سند را در Firestore ذخره می‌کند.
- * @param {object} documentData داده‌های سند
- * @param {string} collectionName نام Collection (docs یا folders)
- * @param {string} docId شناسه سند (برای setDoc)
- * @returns {Promise<void>}
- */
 async function saveDocumentToFirestore(documentData, collectionName, docId) {
     if (window.userId === 'logged_out_public_session') {
         showMessage('Authentication Required', 'Please log in to save and manage your private data.', 'warning');
@@ -584,19 +576,8 @@ async function saveDocumentToFirestore(documentData, collectionName, docId) {
         console.error(`Error saving document ${docId} to Firestore:`, error);
         showMessage('Firestore Error', `Failed to save data: ${error.message}`, 'error');
     }
-    // FIX 1: Explicitly call updateSidebarTitles after successful save of documents/folders
-    // The onSnapshot listener handles data update, but immediate UI refresh ensures responsiveness
-    if (collectionName === 'documents' || collectionName === 'folders') {
-        updateSidebarTitles(); 
-    }
 }
 
-/**
- * یک سند را از Firestore حذف می‌کند.
- * @param {string} docId شناسه سند
- * @param {string} collectionName نام Collection
- * @returns {Promise<void>}
- */
 async function deleteDocumentFromFirestore(docId, collectionName) {
     if (window.userId === 'logged_out_public_session') {
         showMessage('Access Denied', 'Please log in to delete documents.', 'warning');
@@ -612,21 +593,14 @@ async function deleteDocumentFromFirestore(docId, collectionName) {
         console.error(`Error deleting document ${docId} from Firestore:`, error);
         showMessage('Firestore Error', `Failed to delete data: ${error.message}`, 'error');
     }
-    // FIX 1: Explicitly call updateSidebarTitles after successful deletion
-    if (collectionName === 'documents' || collectionName === 'folders') {
-        updateSidebarTitles(); 
-    }
 }
 
-// --- DATA LISTENER FUNCTIONS (Modified: Handle Unsubscribe) ---
+// --- DATA LISTENER FUNCTIONS ---
 
 let unsubscribeDocuments;
 let unsubscribeFolders;
+let unsubscribeSettings;
 
-/**
- * گوش دادن به تغییرات اسناد (Documents) در Firestore
- * اگر کاربر لاگین نکرده باشد، شنونده متوقف شده و آرایه‌ها خالی می‌شوند.
- */
 function listenToDocuments() {
     if (unsubscribeDocuments) unsubscribeDocuments();
 
@@ -650,7 +624,7 @@ function listenToDocuments() {
                 markdown: data.markdown || '',
                 exampleContent: data.exampleContent || '',
                 direction: data.direction || 'ltr',
-                type: data.type || 'js', 
+                type: data.type || 'js',
                 folderId: data.folderId === undefined ? null : data.folderId,
                 checked: data.checked || false,
                 orderIndex: data.orderIndex || 0,
@@ -658,16 +632,13 @@ function listenToDocuments() {
         });
 
         documentsData = docs.sort((a, b) => a.orderIndex - b.orderIndex);
-        updateSidebarTitles(); 
+        updateSidebarTitles();
     }, (error) => {
         console.error("Error listening to documents:", error);
         showMessage('Firestore Error', 'Failed to listen to documents.', 'error');
     });
 }
 
-/**
- * گوش دادن به تغییرات پوشه‌ها (Folders) در Firestore
- */
 function listenToFolders() {
     if (unsubscribeFolders) unsubscribeFolders();
 
@@ -690,14 +661,13 @@ function listenToFolders() {
                 name: data.name || 'Untitled Folder',
                 type: data.type || 'js',
                 isOpen: data.isOpen || false,
-                orderIndex: data.orderIndex || 0, 
+                orderIndex: data.orderIndex || 0,
             });
         });
 
         foldersData = folders.sort((a, b) => a.orderIndex - b.orderIndex);
-        updateSidebarTitles(); 
+        updateSidebarTitles();
         
-        // FIX 2: Ensure modal update only happens if the modal is visibly open
         if (!folderManagementModal.classList.contains('hidden')) {
             populateFolderManagementModal();
         }
@@ -707,10 +677,35 @@ function listenToFolders() {
     });
 }
 
-/**
- * انتظار برای آمادگی احراز هویت
- * @returns {Promise<void>}
- */
+function listenToSettings() {
+    if (unsubscribeSettings) unsubscribeSettings();
+
+    const settingsPath = getCollectionPath('settings');
+    
+    if (window.userId === 'logged_out_public_session' || settingsPath.startsWith('invalid')) {
+        userSettings = {};
+        applyUiSettings();
+        return;
+    }
+
+    const settingsDocRef = doc(window.db, settingsPath, SETTINGS_DOC_ID);
+
+    unsubscribeSettings = onSnapshot(settingsDocRef, (docSnap) => {
+        if (docSnap.exists()) {
+            userSettings = docSnap.data();
+        } else {
+            userSettings = {};
+        }
+        applyUiSettings();
+    }, (error) => {
+        console.error("Error listening to settings:", error);
+        showMessage('Firestore Error', 'Failed to load UI settings.', 'error');
+        userSettings = {};
+        applyUiSettings();
+    });
+}
+
+
 function waitForAuth() {
     return new Promise(resolve => {
         if (window.isAuthReady) {
@@ -728,28 +723,29 @@ function waitForAuth() {
 
 async function loadAllData() {
     await waitForAuth();
-    updateAuthUI(window.auth.currentUser); 
+    updateAuthUI(window.auth.currentUser);
     const user = window.auth.currentUser;
-    const userStatus = user ? 
-        `Logged in as: ${user.email}` : 
+    const userStatus = user ?
+        `Logged in as: ${user.email}` :
         `No user logged in. Please log in to view/save data.`;
     showMessage('Connected', userStatus, 'info');
 
     const savedSection = localStorage.getItem(CURRENT_SECTION_STORAGE_KEY);
     currentSection = (savedSection === 'js' || savedSection === 'react') ? savedSection : 'js';
 
-    listenToDocuments(); 
+    listenToDocuments();
     listenToFolders();
+    listenToSettings();
 
-    if (window.loadNotesFromLocalStorage) { 
-        window.loadNotesFromLocalStorage();
+    if (window.listenToNotes) {
+        window.listenToNotes();
     }
 
     updateSectionToggleBtn();
 }
 
 
-// --- CRUD Operations (Modified: Authentication Check Added) ---
+// --- CRUD Operations ---
 
 async function editDocument(uniqueId) {
     if (window.userId === 'logged_out_public_session') {
@@ -760,6 +756,10 @@ async function editDocument(uniqueId) {
     if (docToEdit) {
         readmeContent.value = docToEdit.markdown;
         exampleContent.value = docToEdit.exampleContent || '';
+        
+        populateFolderSelector();
+        documentFolderSelector.value = docToEdit.folderId === null ? 'null' : docToEdit.folderId;
+
         renderNormalPreview();
         editingDocumentUniqueId = uniqueId;
         updateAddSaveButtonState(true);
@@ -778,14 +778,14 @@ async function renameDocument(uniqueId) {
     if (!docToRename) return;
 
     const currentTitle = docToRename.title;
-    const newTitle = prompt("Enter new title:", currentTitle); 
+    const newTitle = prompt("Enter new title:", currentTitle);
 
     if (newTitle && newTitle.trim() !== "" && newTitle !== currentTitle) {
-        const updatedDoc = { ...docToRename, title: newTitle.trim(), direction: docToRename.direction, type: docToRename.type, folderId: docToRename.folderId, checked: docToRename.checked };
-        // NOTE: orderIndex removed in saveDocumentToFirestore
-        await saveDocumentToFirestore(updatedDoc, 'documents', uniqueId);
+        const updatedDocData = { ...docToRename, title: newTitle.trim() };
+        delete updatedDocData.uniqueId;
+        await saveDocumentToFirestore(updatedDocData, 'documents', uniqueId);
         if (window.currentDisplayedDocumentId === uniqueId) {
-            currentDocumentTitle.textContent = newTitle.trim(); 
+            currentDocumentTitle.textContent = newTitle.trim();
         }
         showMessage('Renamed', `Document renamed to "${newTitle.trim()}".`, 'success');
     } else if (newTitle === null) {
@@ -808,12 +808,11 @@ async function renameFolder(folderId) {
     const newFolderName = prompt("Enter new folder name:", currentFolderName);
 
     if (newFolderName && newFolderName.trim() !== "" && newFolderName !== currentFolderName) {
-        const updatedFolder = { name: newFolderName.trim(), type: folderToRename.type, isOpen: folderToRename.isOpen, orderIndex: folderToRename.orderIndex }; // Keep order index
+        const updatedFolderData = { ...folderToRename, name: newFolderName.trim() };
+        delete updatedFolderData.id;
         
-        // 1. Save changes (this updates Firestore and triggers onSnapshot)
-        await saveDocumentToFirestore(updatedFolder, 'folders', folderId);
+        await saveDocumentToFirestore(updatedFolderData, 'folders', folderId);
         
-        // 2. Refresh modal explicitly immediately after save (before onSnapshot callback fully processes)
         if (!folderManagementModal.classList.contains('hidden')) {
             populateFolderManagementModal();
         }
@@ -842,9 +841,9 @@ async function deleteDocument(uniqueId) {
         
         if (editingDocumentUniqueId === uniqueId) {
              readmeContent.value = '';
-             exampleContent.value = ''; 
+             exampleContent.value = '';
              normalMarkdownPreview.innerHTML = '';
-             editingDocumentUniqueId = null; 
+             editingDocumentUniqueId = null;
              updateAddSaveButtonState(false);
         }
 
@@ -862,8 +861,8 @@ async function toggleDocumentDirection(uniqueId) {
     const docToToggle = documentsData.find(doc => doc.uniqueId === uniqueId);
     if (docToToggle) {
         const newDirection = docToToggle.direction === 'ltr' ? 'rtl' : 'ltr';
-        const updatedDoc = { ...docToToggle, direction: newDirection, title: docToToggle.title, type: docToToggle.type, folderId: docToToggle.folderId, checked: docToToggle.checked, markdown: docToToggle.markdown, exampleContent: docToToggle.exampleContent };
-        // NOTE: orderIndex removed in saveDocumentToFirestore
+        const updatedDoc = { ...docToToggle, direction: newDirection };
+        delete updatedDoc.uniqueId;
         await saveDocumentToFirestore(updatedDoc, 'documents', uniqueId);
         
         if (window.currentDisplayedDocumentId === uniqueId) {
@@ -905,7 +904,7 @@ async function loadAutosaveDraft() {
         if (confirmed) {
             const draftData = JSON.parse(savedDraft);
             readmeContent.value = draftData.main;
-            exampleContent.value = draftData.example; 
+            exampleContent.value = draftData.example;
             renderNormalPreview();
             showMessage('Restored', 'Draft successfully restored.', 'info');
         } else {
@@ -929,21 +928,22 @@ async function addOrSaveDocument() {
         showMessage('Error', 'No content in the editor to save/add!', 'error'); return;
     }
     const title = getDocumentTitleFromMarkdown(currentMarkdown);
+    const selectedFolderId = documentFolderSelector.value === 'null' ? null : documentFolderSelector.value;
     let docIdToDisplay;
     
     if (editingDocumentUniqueId !== null) {
         const indexToUpdate = documentsData.findIndex(item => item.uniqueId === editingDocumentUniqueId);
         if (indexToUpdate > -1) {
             const currentDoc = documentsData[indexToUpdate];
-            const updatedDocData = {
-                title: title,
-                markdown: currentMarkdown,
-                exampleContent: currentExampleContent,
-                direction: currentDoc.direction,
-                type: currentDoc.type,
-                folderId: currentDoc.folderId === undefined ? null : currentDoc.folderId,
-                checked: currentDoc.checked,
-            };
+            const updatedDocData = { ...currentDoc, title: title, markdown: currentMarkdown, exampleContent: currentExampleContent, folderId: selectedFolderId, };
+            
+            if(currentDoc.folderId !== selectedFolderId) {
+                const docsInNewFolder = documentsData.filter(d => d.folderId === selectedFolderId && d.type === currentSection);
+                const maxOrderIndexInNewFolder = docsInNewFolder.reduce((max, doc) => Math.max(max, doc.orderIndex), -1);
+                updatedDocData.orderIndex = maxOrderIndexInNewFolder + 1;
+            }
+
+            delete updatedDocData.uniqueId;
             docIdToDisplay = editingDocumentUniqueId;
             await saveDocumentToFirestore(updatedDocData, 'documents', docIdToDisplay);
             showMessage('Saved!', `Changes to "${title}" successfully saved!`, 'success');
@@ -954,10 +954,12 @@ async function addOrSaveDocument() {
         editingDocumentUniqueId = null; 
         updateAddSaveButtonState(false);
     } else {
-        // NOTE: Since orderIndex is now just for local sorting, we derive the actual orderIndex here
-        const lastOrderIndex = documentsData.reduce((max, doc) => Math.max(max, doc.orderIndex), 0);
-        const newDocId = doc(collection(window.db, getCollectionPath('documents'))).id;
-        docIdToDisplay = newDocId;
+        const docsInFolder = documentsData.filter(d => d.folderId === selectedFolderId && d.type === currentSection);
+        const maxOrderIndex = docsInFolder.reduce((max, doc) => Math.max(max, doc.orderIndex), -1);
+        const newOrderIndex = maxOrderIndex + 1;
+
+        const newDocRef = doc(collection(window.db, getCollectionPath('documents')));
+        docIdToDisplay = newDocRef.id;
 
         const newDocData = {
             title: title,
@@ -966,11 +968,11 @@ async function addOrSaveDocument() {
             direction: 'ltr',
             checked: false,
             type: currentSection,
-            folderId: null, 
-            orderIndex: lastOrderIndex + 1
+            folderId: selectedFolderId, 
+            orderIndex: newOrderIndex
         };
         
-        await saveDocumentToFirestore(newDocData, 'documents', newDocId);
+        await saveDocumentToFirestore(newDocData, 'documents', docIdToDisplay);
         window.currentDisplayedDocumentId = docIdToDisplay; 
         showMessage('Success!', 'New document successfully added!', 'success');
     }
@@ -983,8 +985,9 @@ async function addOrSaveDocument() {
 }
 
 readmeContent.addEventListener('input', () => { renderNormalPreview(); debouncedSaveAutosaveDraft(); });
-exampleContent.addEventListener('input', () => { renderNormalPreview(); debouncedSaveAutosaveDraft(); }); 
+exampleContent.addEventListener('input', () => { renderNormalPreview(); debouncedSaveAutosaveDraft(); });
 addOrSaveDocumentButton.addEventListener('click', addOrSaveDocument);
+
 addEditDocumentSidebarBtn.addEventListener('click', async () => {
     if (window.userId === 'logged_out_public_session') {
         showMessage('Access Denied', 'Please log in to create documents.', 'warning');
@@ -994,6 +997,10 @@ addEditDocumentSidebarBtn.addEventListener('click', async () => {
     exampleContent.value = '';
     normalMarkdownPreview.innerHTML = '';
     editingDocumentUniqueId = null; 
+    
+    const lastFolderId = populateFolderSelector();
+    documentFolderSelector.value = lastFolderId || 'null';
+    
     updateAddSaveButtonState(false);
     showEditor(); 
     readmeContent.focus(); 
@@ -1014,7 +1021,7 @@ toggleDirectionMainBtn.addEventListener('click', () => {
 });
 
 
-// --- Bulk Operations (Modified: Authentication Check) ---
+// --- Bulk Operations ---
 
 saveCurrentSectionButton.addEventListener('click', () => {
     const foldersInCurrentSection = foldersData.filter(f => f.type === currentSection);
@@ -1101,8 +1108,6 @@ deleteAllCurrentSectionButton.addEventListener('click', async () => {
 
         try {
             await batch.commit();
-            
-            // UI cleanup handled by onSnapshot -> updateSidebarTitles
             
             if (editingDocumentUniqueId && docsInCurrentSection.some(d => d.uniqueId === editingDocumentUniqueId)) {
                 editingDocumentUniqueId = null;
@@ -1193,8 +1198,8 @@ function createSidebarListItem(item) {
 
         const docToUpdate = documentsData.find(d => d.uniqueId === item.uniqueId);
         if (docToUpdate) {
-            const updatedDoc = { ...docToUpdate, checked: checkbox.checked, title: docToUpdate.title, direction: docToUpdate.direction, type: docToUpdate.type, folderId: docToUpdate.folderId, markdown: docToUpdate.markdown, exampleContent: docToUpdate.exampleContent };
-            // NOTE: orderIndex removed in saveDocumentToFirestore
+            const updatedDoc = { ...docToUpdate, checked: checkbox.checked };
+            delete updatedDoc.uniqueId;
             await saveDocumentToFirestore(updatedDoc, 'documents', item.uniqueId);
         }
     });
@@ -1209,9 +1214,7 @@ function createSidebarListItem(item) {
         e.stopPropagation(); 
         displaySelectedContent(item.uniqueId);
         
-        // NEW: On mobile, close sidebar after selecting a document
         if (window.innerWidth < 768 && !document.body.classList.contains('sidebar-closed')) {
-            // Force close sequence after content loads/displays
             toggleSidebarState(true); 
         }
     });
@@ -1229,7 +1232,8 @@ function addMultipleDocumentsFromMarkdown(fullMarkdownText, sectionType = 'js', 
 
     const title = getDocumentTitleFromMarkdown(fullMarkdownText);
     const lastOrderIndex = documentsData.reduce((max, doc) => Math.max(max, doc.orderIndex), 0);
-    const newDocId = doc(collection(window.db, getCollectionPath('documents'))).id;
+    const newDocRef = doc(collection(window.db, getCollectionPath('documents')));
+    const newDocId = newDocRef.id;
 
     const newDocData = {
         title: title,
@@ -1245,7 +1249,7 @@ function addMultipleDocumentsFromMarkdown(fullMarkdownText, sectionType = 'js', 
     saveDocumentToFirestore(newDocData, 'documents', newDocId);
 }
 
-// --- Backup/Restore (Modified: Data Access Check) ---
+// --- Backup/Restore ---
 
 async function backupAllDocuments() {
     if (!window.showSaveFilePicker) {
@@ -1264,7 +1268,8 @@ async function backupAllDocuments() {
     const backupData = {
         documents: documentsData,
         folders: foldersData,
-        notes: window.notesData
+        notes: window.notesData,
+        settings: userSettings
     };
 
     const options = {
@@ -1317,7 +1322,7 @@ async function restoreDocuments() {
         const file = await fileHandle.getFile();
         const contents = await file.text();
         
-        const confirmed = await showCustomConfirm('Restoring will overwrite ALL current documents, folders, and notes on your cloud account (Firestore). Are you sure?');
+        const confirmed = await showCustomConfirm('Restoring will overwrite ALL current documents, folders, notes and UI settings on your cloud account (Firestore). Are you sure?');
         if (!confirmed) {
             showMessage('Restore Cancelled', 'Restore operation cancelled.', 'info');
             return;
@@ -1329,8 +1334,9 @@ async function restoreDocuments() {
             let restoreDocs = [];
             let restoreFolders = [];
             let restoreNotes = {};
+            let restoreSettings = {};
 
-            if (restoredData && Array.isArray(restoredData.documents) && Array.isArray(restoredData.folders) && restoredData.notes !== undefined) {
+            if (restoredData && Array.isArray(restoredData.documents) && Array.isArray(restoredData.folders)) {
                 restoreDocs = restoredData.documents.map(item => ({ 
                     ...item, 
                     folderId: item.folderId === undefined ? null : item.folderId,
@@ -1341,8 +1347,8 @@ async function restoreDocuments() {
                     ...item,
                     orderIndex: item.orderIndex || 0,
                 }));
-                restoreNotes = restoredData.notes;
-
+                restoreNotes = restoredData.notes || {};
+                restoreSettings = restoredData.settings || {};
             } else if (Array.isArray(restoredData)) { 
                 restoreDocs = restoredData.map(item => ({ 
                     uniqueId: item.uniqueId || doc(collection(window.db, getCollectionPath('documents'))).id,
@@ -1357,6 +1363,7 @@ async function restoreDocuments() {
                 }));
                 restoreFolders = []; 
                 restoreNotes = {}; 
+                restoreSettings = {};
             } else {
                 showMessage('Restore Failed', 'Invalid backup file format.', 'error');
                 return;
@@ -1364,63 +1371,66 @@ async function restoreDocuments() {
 
             const docsPath = getCollectionPath('documents');
             const foldersPath = getCollectionPath('folders');
+            const notesPath = getCollectionPath('notes');
+            const settingsPath = getCollectionPath('settings');
             
-            // 1. حذف تمام اسناد و پوشه‌های موجود
             const existingDocs = await getDocs(query(collection(window.db, docsPath)));
             const existingFolders = await getDocs(query(collection(window.db, foldersPath)));
+            const existingNotes = await getDocs(query(collection(window.db, notesPath)));
+            const settingsDocRef = doc(window.db, settingsPath, SETTINGS_DOC_ID);
 
             let batch = writeBatch(window.db);
 
             existingDocs.forEach(d => batch.delete(d.ref));
             existingFolders.forEach(f => batch.delete(f.ref));
+            existingNotes.forEach(n => batch.delete(n.ref));
+            batch.delete(settingsDocRef);
             
             await batch.commit();
             
-            // 2. افزودن داده‌های بازیابی شده 
             let currentBatch = writeBatch(window.db);
             let operationCount = 0;
             const maxBatchSize = 499;
 
             restoreDocs.forEach(docData => {
                 const docRef = doc(window.db, docsPath, docData.uniqueId);
-                const dataToSave = { ...docData };
-                delete dataToSave.orderIndex; 
-                currentBatch.set(docRef, dataToSave);
+                currentBatch.set(docRef, docData);
                 operationCount++;
-
-                if (operationCount >= maxBatchSize) {
-                    currentBatch.commit();
-                    currentBatch = writeBatch(window.db);
-                    operationCount = 0;
-                }
+                if (operationCount >= maxBatchSize) { currentBatch.commit(); currentBatch = writeBatch(window.db); operationCount = 0; }
             });
 
             restoreFolders.forEach(folderData => {
                 const docRef = doc(window.db, foldersPath, folderData.id);
-                const dataToSave = { ...folderData };
-                delete dataToSave.orderIndex; 
-                currentBatch.set(docRef, dataToSave);
+                currentBatch.set(docRef, folderData);
                 operationCount++;
-
-                if (operationCount >= maxBatchSize) {
-                    currentBatch.commit();
-                    currentBatch = writeBatch(window.db);
-                    operationCount = 0;
+                if (operationCount >= maxBatchSize) { currentBatch.commit(); currentBatch = writeBatch(window.db); operationCount = 0; }
+            });
+            
+            Object.keys(restoreNotes).forEach(noteDocId => {
+                const noteData = restoreNotes[noteDocId];
+                if (noteData && Object.keys(noteData).length > 0) {
+                    const noteDocRef = doc(window.db, notesPath, noteDocId);
+                    currentBatch.set(noteDocRef, noteData);
+                    operationCount++;
+                    if (operationCount >= maxBatchSize) { currentBatch.commit(); currentBatch = writeBatch(window.db); operationCount = 0; }
                 }
             });
+
+            if (Object.keys(restoreSettings).length > 0) {
+                 const newSettingsDocRef = doc(window.db, settingsPath, SETTINGS_DOC_ID);
+                 currentBatch.set(newSettingsDocRef, restoreSettings);
+                 operationCount++;
+            }
 
             if (operationCount > 0) {
                 await currentBatch.commit();
             }
 
-            window.notesData = restoreNotes; 
-            localStorage.setItem('readmeNotesData', JSON.stringify(restoreNotes)); 
-
-            showMessage('Restore Successful', 'Documents, folders, and notes restored successfully to Firestore!', 'success');
+            showMessage('Restore Successful', 'Documents, folders, notes, and settings restored successfully!', 'success');
 
         } catch (parseError) {
             console.error('Error parsing or saving backup file to Firestore:', parseError);
-            showMessage('Restore Failed', 'Could not parse or save the backup file. Ensure it is valid JSON and Firestore operations succeeded.', 'error');
+            showMessage('Restore Failed', 'Could not parse or save the backup file.', 'error');
         }
     } catch (err) {
         if (err.name === 'AbortError') {
@@ -1432,6 +1442,40 @@ async function restoreDocuments() {
     }
 }
 
+function applyUiSettings() {
+    const appTheme = userSettings.appTheme || 'system-default';
+    appThemeSelector.value = (appTheme && appThemes[appTheme]) ? appTheme : 'system-default';
+
+    const codeTheme = userSettings.codeBlockTheme || 'github';
+    codeBlockThemeSelector.value = (codeTheme && codeHighlightThemes[codeTheme]) ? codeTheme : 'github';
+    
+    applyStyling();
+
+    const fontFamily = userSettings.fontFamily || 'Inter';
+    fontFamilySelector.value = fontFamily;
+    applyFontFamily(fontFamily);
+
+    const fontSize = userSettings.fontSize || '16';
+    fontSizeSlider.value = fontSize;
+    applyFontSize(fontSize);
+}
+
+async function saveSetting(key, value) {
+    if (window.userId === 'logged_out_public_session') {
+        return; 
+    }
+
+    const settingsPath = getCollectionPath('settings');
+    if (settingsPath.startsWith('invalid')) return;
+
+    try {
+        const settingsDocRef = doc(window.db, settingsPath, SETTINGS_DOC_ID);
+        await setDoc(settingsDocRef, { [key]: value }, { merge: true });
+    } catch (error) {
+        console.error(`Error saving setting ${key}:`, error);
+        showMessage('Firestore Error', 'Could not save UI setting.', 'error');
+    }
+}
 
 document.addEventListener('DOMContentLoaded', () => {
     renderNormalPreview(); 
@@ -1445,18 +1489,15 @@ document.addEventListener('DOMContentLoaded', () => {
         if (window.isAuthReady) {
             listenToDocuments(); 
             listenToFolders();
+            listenToSettings();
             
-            if (window.loadNotesFromLocalStorage) { 
-                window.loadNotesFromLocalStorage();
+            if (window.listenToNotes) { 
+                window.listenToNotes();
             }
         }
     });
-
-    // Initial state loading is now handled inside loadAndApplySidebarWidth for better responsiveness
-    // based on screen size and saved preference.
     
     updateSectionIconDisplay(currentSection); 
-    // updateSidebarToggleIcon() is called inside loadAndApplySidebarWidth now
 
     if (appThemeSelector) {
         for (const key in appThemes) { const option = document.createElement('option'); option.value = key; option.textContent = appThemes[key].name; appThemeSelector.appendChild(option); }
@@ -1465,18 +1506,10 @@ document.addEventListener('DOMContentLoaded', () => {
         for (const key in codeHighlightThemes) { const option = document.createElement('option'); option.value = key; option.textContent = codeHighlightThemes[key].name; codeBlockThemeSelector.appendChild(option); }
     }
     document.body.classList.add('dark'); 
-    document.body.classList.remove('glassmorphism-mode'); 
     localStorage.setItem(THEME_STORAGE_KEY, 'dark'); 
     
-    const savedAppTheme = localStorage.getItem(APP_THEME_STORAGE_KEY);
-    appThemeSelector.value = (savedAppTheme && appThemes[savedAppTheme]) ? savedAppTheme : 'system-default';
-    const savedCodeBlockTheme = localStorage.getItem(CODE_BLOCK_THEME_STORAGE_KEY);
-    codeBlockThemeSelector.value = (savedCodeBlockTheme && codeHighlightThemes[savedCodeBlockTheme]) ? savedCodeBlockTheme : 'github';
-    applyStyling();
-    const savedFontFamily = localStorage.getItem(FONT_FAMILY_STORAGE_KEY);
-    fontFamilySelector.value = savedFontFamily || 'Inter'; applyFontFamily(fontFamilySelector.value);
-    const savedFontSize = localStorage.getItem(FONT_SIZE_STORAGE_KEY);
-    fontSizeSlider.value = savedFontSize || '16'; applyFontSize(savedFontSize);
+    applyUiSettings(); 
+
     updateFullscreenToggleIcon();
 
     if (moveDocUpFixedBtn) {
@@ -1528,7 +1561,7 @@ document.addEventListener('DOMContentLoaded', () => {
             }
             
             const updatedDoc = { ...docToMove, folderId: targetFolderId };
-            delete updatedDoc.orderIndex; 
+            delete updatedDoc.uniqueId; 
             await saveDocumentToFirestore(updatedDoc, 'documents', docToMove.uniqueId);
 
             populateFolderManagementModal(); 
@@ -1560,10 +1593,10 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 });
 
-if (appThemeSelector) appThemeSelector.addEventListener('change', () => { localStorage.setItem(APP_THEME_STORAGE_KEY, appThemeSelector.value); applyStyling(); });
-if (codeBlockThemeSelector) codeBlockThemeSelector.addEventListener('change', () => { localStorage.setItem(CODE_BLOCK_THEME_STORAGE_KEY, codeBlockThemeSelector.value); applyStyling(); });
-fontFamilySelector.addEventListener('change', () => { const selectedFont = fontFamilySelector.value; localStorage.setItem(FONT_FAMILY_STORAGE_KEY, selectedFont); applyFontFamily(selectedFont); });
-fontSizeSlider.addEventListener('input', () => { const currentSize = fontSizeSlider.value; localStorage.setItem(FONT_SIZE_STORAGE_KEY, currentSize); applyFontSize(currentSize); });
+if (appThemeSelector) appThemeSelector.addEventListener('change', () => { saveSetting('appTheme', appThemeSelector.value); applyStyling(); });
+if (codeBlockThemeSelector) codeBlockThemeSelector.addEventListener('change', () => { saveSetting('codeBlockTheme', codeBlockThemeSelector.value); applyStyling(); });
+fontFamilySelector.addEventListener('change', () => { const selectedFont = fontFamilySelector.value; saveSetting('fontFamily', selectedFont); applyFontFamily(selectedFont); });
+fontSizeSlider.addEventListener('input', () => { const currentSize = fontSizeSlider.value; saveSetting('fontSize', currentSize); applyFontSize(currentSize); });
 
 function openMenu() { hamburgerMenu.classList.add('open'); hamburgerOverlay.classList.add('open'); hamburgerIcon.classList.add('open'); document.body.classList.add('menu-open'); }
 function closeMenu() { hamburgerMenu.classList.remove('open'); hamburgerOverlay.classList.remove('open'); hamburgerIcon.classList.remove('open'); document.body.classList.remove('menu-open'); }
@@ -1572,7 +1605,6 @@ hamburgerOverlay.addEventListener('click', closeMenu);
 
 function updateSidebarToggleIcon() {
     const isClosed = document.body.classList.contains('sidebar-closed');
-    // Hide one icon and show the other based on the closed state
     if (sidebarToggleOpenIcon && sidebarToggleCloseIcon) {
         if (isClosed) {
             sidebarToggleOpenIcon.classList.remove('hidden');
@@ -1584,16 +1616,12 @@ function updateSidebarToggleIcon() {
     }
 }
 
-/**
- * Toggles the sidebar state (open/closed).
- * @param {boolean} [forceClose] If true, forces the sidebar to close.
- */
 function toggleSidebarState(forceClose = false) {
     const currentSidebarWidth = sidebar.offsetWidth; 
     const isMobile = window.innerWidth < 768;
     const isClosed = document.body.classList.contains('sidebar-closed');
 
-    if (forceClose && isClosed) return; // Already closed, no action needed
+    if (forceClose && isClosed) return;
 
     let shouldBeClosed = isClosed;
     if (forceClose) {
@@ -1610,27 +1638,22 @@ function toggleSidebarState(forceClose = false) {
         localStorage.setItem(SIDEBAR_STATE_KEY, 'open');
     }
 
-    // Apply transitions for visual smoothness
     if(sidebar) sidebar.style.transition = 'left 0.3s ease-in-out, width 0.3s ease-in-out';
     if(resizer) resizer.style.transition = 'left 0.3s ease-in-out, background-color 0.15s ease-in-out';
     if(mainContentArea) mainContentArea.style.transition = 'margin-left 0.3s ease-in-out, width 0.3s ease-in-out';
 
     if (isMobile) {
         if (shouldBeClosed) {
-            // Close: move sidebar off-screen to the left
             if(sidebar) sidebar.style.left = `-${currentSidebarWidth}px`;
             if(mainContentArea) mainContentArea.style.marginLeft = '0px';
             if(resizer) resizer.style.left = `0px`;
         } else { 
-            // Open: move sidebar to be visible (0)
             if(sidebar) sidebar.style.left = '0px';
-            // Overlay the main content (no margin needed)
             if(mainContentArea) mainContentArea.style.marginLeft = '0px';
             if(resizer) resizer.style.left = `0px`;
         }
         
     } else {
-        // Desktop behavior
         if (shouldBeClosed) { 
             if(sidebar) sidebar.style.left = `-${currentSidebarWidth}px`;
             if(resizer) resizer.style.left = `0px`;
@@ -1651,7 +1674,6 @@ sidebarToggleBtn.addEventListener('click', () => {
     toggleSidebarState();
 });
 
-// NEW: Add window resize listener to ensure responsiveness updates
 window.addEventListener('resize', loadAndApplySidebarWidth);
 
 
@@ -1791,7 +1813,7 @@ sectionToggleBtn.addEventListener('click', () => {
 
 
 function updateFullscreenToggleIcon() {
-    fullscreenToggle.innerHTML = document.fullscreenElement ? '<svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 4H4m0 0v4m0-4l5 5m7-5h4m0 0v4m0-4l-5 5M8 20H4m0 0v4m0 4l5-5m7 5h4m0 0v-4m0 4l-5-5"></path></svg>' : '<svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 1v4m0 0h-4m4 0l-5-5"></path></svg>';
+    fullscreenToggle.innerHTML = document.fullscreenElement ? '<svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 4H4m0 0v4m0-4l5 5m7-5h4m0 0v4m0-4l-5 5M8 20H4m0 0v-4m0 4l5-5m7 5h4m0 0v-4m0 4l-5-5"></path></svg>' : '<svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 1v4m0 0h-4m4 0l-5-5"></path></svg>';
 }
 fullscreenToggle.addEventListener('click', () => {
     if (!document.fullscreenElement) document.documentElement.requestFullscreen().catch(err => showMessage('Fullscreen Error', `Error: ${err.message}`, 'error'));
@@ -1847,11 +1869,23 @@ summarizeContentButton.addEventListener('click', async () => {
     } finally { summarizeSpinner.classList.add('hidden'); summarizeButtonText.classList.remove('hidden'); summarizeContentButton.disabled = false; }
 });
 closeSummaryModal.addEventListener('click', () => { summaryModal.classList.add('hidden'); summaryContent.innerHTML = ''; });
+if(summaryModal) summaryModal.addEventListener('click', (e) => {
+    if (e.target === summaryModal) {
+        summaryModal.classList.add('hidden');
+        summaryContent.innerHTML = '';
+    }
+});
+
 
 function openSearchModal() { advancedSearchModal.classList.remove('hidden'); modalSearchTermInput.focus(); }
 function closeSearchModal() { advancedSearchModal.classList.add('hidden'); }
 if(openSearchModalBtn) openSearchModalBtn.addEventListener('click', openSearchModal);
 if(closeSearchModalBtn) closeSearchModalBtn.addEventListener('click', closeSearchModal);
+if(advancedSearchModal) advancedSearchModal.addEventListener('click', (e) => {
+    if (e.target === advancedSearchModal) {
+        closeSearchModal();
+    }
+});
 if(modalSearchScope) modalSearchScope.addEventListener('change', () => {
     modalSectionTypeFilterContainer.classList.toggle('hidden', modalSearchScope.value !== 'allDocuments');
 });
@@ -2158,6 +2192,11 @@ authButton.addEventListener('click', () => {
 });
 
 closeLoginModalBtn.addEventListener('click', closeLoginModal);
+if(loginModal) loginModal.addEventListener('click', (e) => {
+    if (e.target === loginModal) {
+        closeLoginModal();
+    }
+});
 loginSubmitBtn.addEventListener('click', handleAuthSubmit);
 switchToSignUpBtn.addEventListener('click', (e) => {
     e.preventDefault();
@@ -2206,11 +2245,11 @@ async function createFolder() {
     }
     
     const foldersPath = getCollectionPath('folders');
-    const newFolderId = doc(collection(window.db, foldersPath)).id;
+    const newFolderRef = doc(collection(window.db, foldersPath));
+    const newFolderId = newFolderRef.id;
     const lastOrderIndex = foldersData.reduce((max, folder) => Math.max(max, folder.orderIndex), 0);
     
     const newFolderData = {
-        id: newFolderId,
         name: folderName,
         type: currentSection,
         isOpen: false, // NEW: Default to closed
@@ -2752,6 +2791,11 @@ function populateFolderManagementModal() {
 // Event Listeners for Folder Management
 manageFoldersBtn.addEventListener('click', openFolderModal);
 closeFolderModalBtn.addEventListener('click', closeFolderModal);
+if(folderManagementModal) folderManagementModal.addEventListener('click', (e) => {
+    if (e.target === folderManagementModal) {
+        closeFolderModal();
+    }
+});
 createFolderBtn.addEventListener('click', createFolder);
 
 newFolderNameInput.addEventListener('keypress', (e) => {
@@ -2761,6 +2805,11 @@ newFolderNameInput.addEventListener('keypress', (e) => {
 });
 
 closeUncategorizedModalBtn.addEventListener('click', closeUncategorizedDocsModal);
+if(uncategorizedDocsModal) uncategorizedDocsModal.addEventListener('click', (e) => {
+    if (e.target === uncategorizedDocsModal) {
+        closeUncategorizedDocsModal();
+    }
+});
 addSelectedDocsToFolderBtn.addEventListener('click', addSelectedDocsToFolder);
 
 // --- FIX: Expose functions globally for inline HTML attributes (onclick) ---
@@ -2768,3 +2817,4 @@ window.renameFolder = renameFolder;
 window.deleteFolder = deleteFolder;
 window.showUncategorizedDocumentsModal = showUncategorizedDocumentsModal;
 // -------------------------------------------------------------------------
+
